@@ -181,12 +181,15 @@ function ICTDashboardPage() {
     const checkMaintenanceMode = async () => {
       const { data, error } = await supabase
         .from('system_settings')
-        .select('maintenance_mode, maintenance_message')
-        .single();
+        .select('key, value')
+        .in('key', ['maintenance_mode', 'maintenance_message']);
 
       if (!error && data) {
-        setMaintenanceMode(data.maintenance_mode);
-        setMaintenanceMessage(data.maintenance_message);
+        const modeEntry = data.find(item => item.key === 'maintenance_mode');
+        const messageEntry = data.find(item => item.key === 'maintenance_message');
+        
+        setMaintenanceMode(modeEntry?.value === 'true');
+        setMaintenanceMessage(messageEntry?.value || 'System is under maintenance. We will be back soon.');
       }
       setLoading(false);
     };
@@ -202,10 +205,11 @@ function ICTDashboardPage() {
           event: 'UPDATE',
           schema: 'public',
           table: 'system_settings',
+          filter: 'key=in.(maintenance_mode,maintenance_message)',
         },
-        (payload: any) => {
-          setMaintenanceMode(payload.new.maintenance_mode);
-          setMaintenanceMessage(payload.new.maintenance_message);
+        () => {
+          // Refetch settings on update
+          checkMaintenanceMode();
         }
       )
       .subscribe();
@@ -244,12 +248,15 @@ function FacultyDashboardPage() {
     const checkMaintenanceMode = async () => {
       const { data, error } = await supabase
         .from('system_settings')
-        .select('maintenance_mode, maintenance_message')
-        .single();
+        .select('key, value')
+        .in('key', ['maintenance_mode', 'maintenance_message']);
 
       if (!error && data) {
-        setMaintenanceMode(data.maintenance_mode);
-        setMaintenanceMessage(data.maintenance_message);
+        const modeEntry = data.find(item => item.key === 'maintenance_mode');
+        const messageEntry = data.find(item => item.key === 'maintenance_message');
+        
+        setMaintenanceMode(modeEntry?.value === 'true');
+        setMaintenanceMessage(messageEntry?.value || 'System is under maintenance. We will be back soon.');
       }
       setLoading(false);
     };
@@ -265,10 +272,11 @@ function FacultyDashboardPage() {
           event: 'UPDATE',
           schema: 'public',
           table: 'system_settings',
+          filter: 'key=in.(maintenance_mode,maintenance_message)',
         },
-        (payload: any) => {
-          setMaintenanceMode(payload.new.maintenance_mode);
-          setMaintenanceMessage(payload.new.maintenance_message);
+        () => {
+          // Refetch settings on update
+          checkMaintenanceMode();
         }
       )
       .subscribe();
@@ -307,12 +315,15 @@ function StudentDashboardPage() {
     const checkMaintenanceMode = async () => {
       const { data, error } = await supabase
         .from('system_settings')
-        .select('maintenance_mode, maintenance_message')
-        .single();
+        .select('key, value')
+        .in('key', ['maintenance_mode', 'maintenance_message']);
 
       if (!error && data) {
-        setMaintenanceMode(data.maintenance_mode);
-        setMaintenanceMessage(data.maintenance_message);
+        const modeEntry = data.find(item => item.key === 'maintenance_mode');
+        const messageEntry = data.find(item => item.key === 'maintenance_message');
+        
+        setMaintenanceMode(modeEntry?.value === 'true');
+        setMaintenanceMessage(messageEntry?.value || 'System is under maintenance. We will be back soon.');
       }
       setLoading(false);
     };
@@ -328,10 +339,11 @@ function StudentDashboardPage() {
           event: 'UPDATE',
           schema: 'public',
           table: 'system_settings',
+          filter: 'key=in.(maintenance_mode,maintenance_message)',
         },
-        (payload: any) => {
-          setMaintenanceMode(payload.new.maintenance_mode);
-          setMaintenanceMessage(payload.new.maintenance_message);
+        () => {
+          // Refetch settings on update
+          checkMaintenanceMode();
         }
       )
       .subscribe();
@@ -377,7 +389,7 @@ function AppContent() {
       
       {/* Protected dashboard routes */}
       <Route 
-        path="/admin/*" 
+        path="/admin" 
         element={
           <ProtectedRoute allowedRoles={['admin']}>
             <AdminDashboardPage />
@@ -385,7 +397,7 @@ function AppContent() {
         } 
       />
       <Route 
-        path="/ict/*" 
+        path="/ict" 
         element={
           <ProtectedRoute allowedRoles={['ict']}>
             <ICTDashboardPage />
@@ -393,7 +405,7 @@ function AppContent() {
         } 
       />
       <Route 
-        path="/faculty/*" 
+        path="/faculty" 
         element={
           <ProtectedRoute allowedRoles={['faculty']}>
             <FacultyDashboardPage />
@@ -401,7 +413,7 @@ function AppContent() {
         } 
       />
       <Route 
-        path="/student/*" 
+        path="/student" 
         element={
           <ProtectedRoute allowedRoles={['student']}>
             <StudentDashboardPage />

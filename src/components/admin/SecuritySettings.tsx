@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
@@ -10,28 +10,145 @@ import {
   SelectTrigger,
   SelectValue,
 } from '../ui/select';
-import { Lock, Key, Eye, Shield } from 'lucide-react';
+import { Lock, Eye, Shield } from 'lucide-react';
 import { toast } from 'sonner@2.0.3';
+import { supabase } from '../../lib/supabaseClient';
+import { useAuth } from '../../contexts/AuthContext';
 
 interface SecuritySettingsProps {
   onSave?: (settings: any) => void;
 }
 
 export default function SecuritySettings({ onSave }: SecuritySettingsProps) {
+  const { user: currentUser } = useAuth();
+  const [loading, setLoading] = useState(true);
   const [settings, setSettings] = useState({
     session_timeout: '30',
-    password_expiry: '90',
     max_login_attempts: '5',
-    two_factor_auth: false,
     data_encryption: true,
     audit_logging: true,
     access_logs_retention: '90',
   });
 
-  const handleSave = () => {
-    toast.success('Security settings updated!');
-    onSave?.(settings);
+  // Load settings from database on mount
+  useEffect(() => {
+    loadSettings();
+  }, []);
+
+  const loadSettings = async () => {
+    const { data, error } = await supabase
+      .from('system_settings')
+      .select('key, value')
+      .in('key', ['session_timeout', 'max_login_attempts', 'data_encryption', 'audit_logging', 'access_logs_retention']);
+
+    if (error) {
+      console.error('Error loading security settings:', error);
+    } else if (data && data.length > 0) {
+      const settingsObj: any = {};
+      data.forEach(item => {
+        if (item.key === 'data_encryption' || item.key === 'audit_logging') {
+          settingsObj[item.key] = item.value === 'true';
+        } else {
+          settingsObj[item.key] = item.value;
+        }
+      });
+      setSettings({ ...settings, ...settingsObj });
+    } else {
+      // Create default settings if none exist
+      await supabase.from('system_settings').insert([
+        { 
+          key: 'session_timeout', 
+          value: '30',
+          description: 'Session timeout in minutes',
+          updated_by: currentUser?.id
+        },
+        { 
+          key: 'max_login_attempts', 
+          value: '5',
+          description: 'Maximum login attempts before account lock',
+          updated_by: currentUser?.id
+        },
+        { 
+          key: 'data_encryption', 
+          value: 'true',
+          description: 'Enable data encryption at rest',
+          updated_by: currentUser?.id
+        },
+        { 
+          key: 'audit_logging', 
+          value: 'true',
+          description: 'Track all user actions and system events',
+          updated_by: currentUser?.id
+        },
+        { 
+          key: 'access_logs_retention', 
+          value: '90',
+          description: 'Access logs retention period in days',
+          updated_by: currentUser?.id
+        }
+      ]);
+    }
+    setLoading(false);
   };
+
+  const handleSave = async () => {
+    // Validation
+    const sessionTimeout = parseInt(settings.session_timeout);
+    const maxLoginAttempts = parseInt(settings.max_login_attempts);
+
+    if (isNaN(sessionTimeout) || sessionTimeout < 5 || sessionTimeout > 1440) {
+      toast.error('Session timeout must be between 5 and 1440 minutes');
+      return;
+    }
+
+    if (isNaN(maxLoginAttempts) || maxLoginAttempts < 3 || maxLoginAttempts > 10) {
+      toast.error('Max login attempts must be between 3 and 10');
+      return;
+    }
+
+    // Update each setting individually in the database
+    const updates = [];
+    for (const [key, value] of Object.entries(settings)) {
+      updates.push(
+        supabase
+          .from('system_settings')
+          .update({ 
+            value: String(value),
+            updated_at: new Date().toISOString(),
+            updated_by: currentUser?.id
+          })
+          .eq('key', key)
+      );
+    }
+
+    const results = await Promise.all(updates);
+    const hasError = results.some(r => r.error);
+
+    if (hasError) {
+      console.error('Error updating security settings');
+      toast.error('Failed to update security settings');
+      return;
+    }
+
+    toast.success('Security settings updated successfully!');
+    onSave?.(settings);
+
+    // Log the change
+    await supabase.from('activity_logs').insert({
+      action: 'Updated security settings',
+      user_id: currentUser?.id || null,
+      ip_address: null,
+      device: navigator.userAgent
+    });
+  };
+
+  if (loading) {
+    return (
+      <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
+        <p className="text-gray-500 font-['Abel',sans-serif]">Loading security settings...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
@@ -69,9 +186,11 @@ export default function SecuritySettings({ onSave }: SecuritySettingsProps) {
                   setSettings({ ...settings, session_timeout: e.target.value })
                 }
                 placeholder="30"
+                min="5"
+                max="1440"
               />
               <p className="text-xs text-gray-500">
-                Automatically log out inactive users
+                Automatically log out inactive users (5-1440 minutes)
               </p>
             </div>
 
@@ -87,64 +206,12 @@ export default function SecuritySettings({ onSave }: SecuritySettingsProps) {
                   setSettings({ ...settings, max_login_attempts: e.target.value })
                 }
                 placeholder="5"
+                min="3"
+                max="10"
               />
               <p className="text-xs text-gray-500">
-                Lock account after failed attempts
+                Lock account after failed attempts (3-10)
               </p>
-            </div>
-          </div>
-        </div>
-
-        {/* Password Policies */}
-        <div className="space-y-4 pt-4 border-t border-gray-200">
-          <div className="flex items-center gap-2 mb-2">
-            <Key className="text-gray-600" size={18} />
-            <h4 className="font-['Abel',sans-serif] text-sm text-gray-900">
-              Password Policies
-            </h4>
-          </div>
-          <div className="pl-6 space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="password-expiry" className="font-['Abel',sans-serif]">
-                Password Expiry (days)
-              </Label>
-              <Select
-                value={settings.password_expiry}
-                onValueChange={(value) =>
-                  setSettings({ ...settings, password_expiry: value })
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="30">30 days</SelectItem>
-                  <SelectItem value="60">60 days</SelectItem>
-                  <SelectItem value="90">90 days</SelectItem>
-                  <SelectItem value="180">180 days</SelectItem>
-                  <SelectItem value="never">Never</SelectItem>
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-gray-500">
-                Force users to change passwords periodically
-              </p>
-            </div>
-
-            <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-              <div>
-                <p className="font-['Abel',sans-serif] text-sm text-gray-900 mb-1">
-                  Two-Factor Authentication
-                </p>
-                <p className="text-xs text-gray-500">
-                  Require 2FA for all user accounts
-                </p>
-              </div>
-              <Switch
-                checked={settings.two_factor_auth}
-                onCheckedChange={(checked) =>
-                  setSettings({ ...settings, two_factor_auth: checked })
-                }
-              />
             </div>
           </div>
         </div>

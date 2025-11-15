@@ -277,22 +277,36 @@ export default function AdminTickets() {
         return;
       }
 
-      // Create notifications for all assigned ICT staff
-      const notifications = ictStaff.map(staff => ({
-        user_id: staff.id,
-        title: 'New Ticket Assigned',
-        message: `New ${ticket.category} ticket "${ticket.title}" has been assigned to your department.`,
-        type: 'info' as const,
-        is_read: false,
-        ticket_id: ticket.id,
-      }));
+      // Get user preferences for all assigned ICT staff
+      const { data: preferences } = await supabase
+        .from('user_preferences')
+        .select('user_id, ticket_updates')
+        .in('user_id', assignedStaffIds);
 
-      const { error: notifError } = await supabase
-        .from('notifications')
-        .insert(notifications);
+      // Create notifications only for users who have ticket_updates enabled
+      const notificationsToCreate = ictStaff
+        .filter(staff => {
+          const userPref = preferences?.find(p => p.user_id === staff.id);
+          // Default to true if preference not found
+          return userPref?.ticket_updates !== false;
+        })
+        .map(staff => ({
+          user_id: staff.id,
+          title: 'New Ticket Assigned',
+          message: `New ${ticket.category} ticket "${ticket.title}" has been assigned to your department.`,
+          type: 'info' as const,
+          is_read: false,
+          ticket_id: ticket.id,
+        }));
 
-      if (notifError) {
-        console.error('Error creating notifications:', notifError);
+      if (notificationsToCreate.length > 0) {
+        const { error: notifError } = await supabase
+          .from('notifications')
+          .insert(notificationsToCreate);
+
+        if (notifError) {
+          console.error('Error creating notifications:', notifError);
+        }
       }
 
       // Update local state

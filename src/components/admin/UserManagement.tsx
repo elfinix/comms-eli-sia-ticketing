@@ -50,11 +50,12 @@ const roleBadgeColors = {
   student: 'bg-orange-100 text-orange-800 border-orange-200',
 };
 
-const ictDepartments = [
+const departments = [
+  'General',
   'ICT - Hardware',
   'ICT - Software',
-  'ICT - Internet',
-  'ICT - Accounts',
+  'ICT - Network',
+  'ICT - Account',
 ];
 
 export default function UserManagement() {
@@ -622,7 +623,7 @@ export default function UserManagement() {
                     <SelectValue placeholder="Select ICT Department" />
                   </SelectTrigger>
                   <SelectContent>
-                    {ictDepartments.map((dept) => (
+                    {departments.map((dept) => (
                       <SelectItem key={dept} value={dept}>{dept}</SelectItem>
                     ))}
                   </SelectContent>
@@ -705,7 +706,7 @@ export default function UserManagement() {
                     <SelectValue placeholder="Select ICT Department" />
                   </SelectTrigger>
                   <SelectContent>
-                    {ictDepartments.map((dept) => (
+                    {departments.map((dept) => (
                       <SelectItem key={dept} value={dept}>{dept}</SelectItem>
                     ))}
                   </SelectContent>

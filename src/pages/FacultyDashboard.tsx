@@ -180,6 +180,10 @@ export default function FacultyDashboard({ onLogout, currentUserId }: FacultyDas
         assignedTo: ticket.assigned_to || undefined,
         submittedBy: user?.name || 'Unknown User',
         submittedByRole: 'faculty',
+        // Explicitly pass resolution fields
+        resolution_notes: ticket.resolution_notes,
+        resolution_attachment: ticket.resolution_attachment,
+        resolved_at: ticket.resolved_at,
       } as any);
       setShowViewTicketModal(true);
     }
@@ -493,6 +497,11 @@ export default function FacultyDashboard({ onLogout, currentUserId }: FacultyDas
         ticket={selectedTicket}
         userRole="faculty"
         onNavigateToChat={handleNavigateToChat}
+        onAcknowledged={() => {
+          // Refresh tickets after acknowledgment
+          fetchTickets();
+          setShowViewTicketModal(false);
+        }}
       />
 
       {/* New Ticket Modal */}

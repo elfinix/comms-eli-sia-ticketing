@@ -4,6 +4,7 @@ import { getTimeAgo } from '../data/notificationsData';
 import { useNotifications } from '../contexts/NotificationsContext';
 import { Button } from './ui/button';
 import { supabase } from '../lib/supabaseClient';
+import { toast } from 'react-toastify';
 
 interface NotificationsPageProps {
   onNavigateToChat?: () => void;
@@ -39,21 +40,62 @@ export default function NotificationsPage({ onNavigateToChat }: NotificationsPag
     
     // If it's a chat notification, look up sender and navigate to chat
     if (isChatNotification(notification) && onNavigateToChat) {
-      // Parse sender name from title: "New Message from <sender>"
-      const senderName = notification.title.replace('New Message from ', '').trim();
+      // Use chat_sender_id from notification if available
+      const chatSenderId = (notification as any).chat_sender_id;
       
-      // Look up sender's user_id from users table
-      const { data: users, error } = await supabase
-        .from('users')
-        .select('id')
-        .eq('name', senderName)
-        .limit(1);
-      
-      if (!error && users && users.length > 0) {
-        sessionStorage.setItem('chatContactId', users[0].id);
+      if (chatSenderId) {
+        // Check if there's an active (non-archived) conversation with this sender
+        const currentUserId = (await supabase.auth.getUser()).data.user?.id;
+        
+        if (currentUserId) {
+          const { data: messages, error } = await supabase
+            .from('chat_messages')
+            .select('id, archived_at')
+            .or(`and(sender_id.eq.${currentUserId},receiver_id.eq.${chatSenderId}),and(sender_id.eq.${chatSenderId},receiver_id.eq.${currentUserId})`)
+            .is('archived_at', null)
+            .limit(1);
+          
+          if (!error && messages && messages.length > 0) {
+            // Active conversation exists, navigate to it
+            sessionStorage.setItem('chatContactId', chatSenderId);
+            onNavigateToChat();
+          } else {
+            // Conversation is archived or doesn't exist
+            toast.error('This conversation has been archived');
+          }
+        }
+      } else {
+        // Fallback to old method: parse sender name from title
+        const senderName = notification.title.replace('New Message from ', '').trim();
+        
+        // Look up sender's user_id from users table
+        const { data: users, error } = await supabase
+          .from('users')
+          .select('id')
+          .eq('name', senderName)
+          .limit(1);
+        
+        if (!error && users && users.length > 0) {
+          // Check if there's an active conversation
+          const currentUserId = (await supabase.auth.getUser()).data.user?.id;
+          
+          if (currentUserId) {
+            const { data: messages } = await supabase
+              .from('chat_messages')
+              .select('id, archived_at')
+              .or(`and(sender_id.eq.${currentUserId},receiver_id.eq.${users[0].id}),and(sender_id.eq.${users[0].id},receiver_id.eq.${currentUserId})`)
+              .is('archived_at', null)
+              .limit(1);
+            
+            if (messages && messages.length > 0) {
+              sessionStorage.setItem('chatContactId', users[0].id);
+              onNavigateToChat();
+            } else {
+              toast.error('This conversation has been archived');
+            }
+          }
+        }
       }
-      
-      onNavigateToChat();
     }
   };
 

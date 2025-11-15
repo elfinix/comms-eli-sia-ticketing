@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Bell, Shield, Download } from 'lucide-react';
 import { Button } from './ui/button';
 import { Switch } from './ui/switch';
@@ -13,15 +13,92 @@ interface SettingsPageProps {
 
 export default function SettingsPage({ userRole }: SettingsPageProps) {
   const { user } = useAuth();
+  const [loading, setLoading] = useState(true);
   const [settings, setSettings] = useState({
-    emailNotifications: true,
     pushNotifications: true,
     ticketUpdates: true,
     newMessages: true,
   });
 
-  const handleSaveSettings = () => {
-    toast.success('Settings saved successfully!');
+  // Load user preferences from database
+  useEffect(() => {
+    if (user?.id) {
+      loadSettings();
+    }
+  }, [user?.id]);
+
+  const loadSettings = async () => {
+    if (!user?.id) return;
+
+    try {
+      const { data, error } = await supabase
+        .from('user_preferences')
+        .select('push_notifications, ticket_updates, new_messages')
+        .eq('user_id', user.id)
+        .single();
+
+      if (error) {
+        // If no preferences exist yet, create default ones
+        if (error.code === 'PGRST116') {
+          await supabase.from('user_preferences').insert({
+            user_id: user.id,
+            push_notifications: true,
+            ticket_updates: true,
+            new_messages: true,
+          });
+        } else {
+          console.error('Error loading preferences:', error);
+        }
+      } else if (data) {
+        setSettings({
+          pushNotifications: data.push_notifications,
+          ticketUpdates: data.ticket_updates,
+          newMessages: data.new_messages,
+        });
+      }
+    } catch (error) {
+      console.error('Error loading settings:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSaveSettings = async () => {
+    if (!user?.id) {
+      toast.error('User not authenticated');
+      return;
+    }
+
+    try {
+      const { error } = await supabase
+        .from('user_preferences')
+        .upsert({
+          user_id: user.id,
+          push_notifications: settings.pushNotifications,
+          ticket_updates: settings.ticketUpdates,
+          new_messages: settings.newMessages,
+          updated_at: new Date().toISOString(),
+        });
+
+      if (error) {
+        console.error('Error saving settings:', error);
+        toast.error('Failed to save settings');
+        return;
+      }
+
+      // Log the activity
+      await supabase.from('activity_logs').insert({
+        user_id: user.id,
+        action: 'Updated notification preferences',
+        device: navigator.userAgent,
+        ip_address: null,
+      });
+
+      toast.success('Settings saved successfully!');
+    } catch (error) {
+      console.error('Error saving settings:', error);
+      toast.error('Failed to save settings. Please try again.');
+    }
   };
 
   const handleExportData = async () => {
@@ -74,6 +151,16 @@ export default function SettingsPage({ userRole }: SettingsPageProps) {
     }
   };
 
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
+          <p className="text-gray-500 font-['Abel',sans-serif]">Loading settings...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -97,7 +184,7 @@ export default function SettingsPage({ userRole }: SettingsPageProps) {
               Notifications
             </h3>
             <p className="text-sm text-gray-500 font-['Abel',sans-serif]">
-              Configure how you receive notifications
+              Configure how you receive in-app notifications
             </p>
           </div>
         </div>
@@ -105,24 +192,9 @@ export default function SettingsPage({ userRole }: SettingsPageProps) {
         <div className="space-y-4">
           <div className="flex items-center justify-between py-3 border-b border-gray-100">
             <div>
-              <Label className="font-['Abel',sans-serif] text-gray-900">Email Notifications</Label>
-              <p className="text-sm text-gray-500 font-['Abel',sans-serif]">
-                Receive notifications via email
-              </p>
-            </div>
-            <Switch
-              checked={settings.emailNotifications}
-              onCheckedChange={(checked) =>
-                setSettings({ ...settings, emailNotifications: checked })
-              }
-            />
-          </div>
-
-          <div className="flex items-center justify-between py-3 border-b border-gray-100">
-            <div>
               <Label className="font-['Abel',sans-serif] text-gray-900">Push Notifications</Label>
               <p className="text-sm text-gray-500 font-['Abel',sans-serif]">
-                Receive push notifications in browser
+                Receive real-time notifications in the app
               </p>
             </div>
             <Switch

@@ -18,6 +18,66 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [supabaseUser, setSupabaseUser] = useState<SupabaseUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const [sessionTimeoutId, setSessionTimeoutId] = useState<NodeJS.Timeout | null>(null);
+  const [lastActivity, setLastActivity] = useState<number>(Date.now());
+
+  // Session timeout handler
+  useEffect(() => {
+    if (!user) return;
+
+    const setupSessionTimeout = async () => {
+      // Get session timeout setting from database
+      const { data } = await supabase
+        .from('system_settings')
+        .select('value')
+        .eq('key', 'session_timeout')
+        .single();
+
+      const timeoutMinutes = data?.value ? parseInt(data.value) : 30;
+      const timeoutMs = timeoutMinutes * 60 * 1000;
+
+      // Clear any existing timeout
+      if (sessionTimeoutId) {
+        clearTimeout(sessionTimeoutId);
+      }
+
+      // Set new timeout
+      const timeoutId = setTimeout(async () => {
+        console.log('Session timeout - logging out user');
+        await signOut();
+        window.location.href = '/';
+      }, timeoutMs);
+
+      setSessionTimeoutId(timeoutId);
+    };
+
+    setupSessionTimeout();
+
+    // Track user activity
+    const activityEvents = ['mousedown', 'keydown', 'scroll', 'touchstart', 'click'];
+    
+    const resetTimeout = () => {
+      const now = Date.now();
+      // Only reset if more than 1 minute has passed since last activity
+      if (now - lastActivity > 60000) {
+        setLastActivity(now);
+        setupSessionTimeout();
+      }
+    };
+
+    activityEvents.forEach(event => {
+      window.addEventListener(event, resetTimeout);
+    });
+
+    return () => {
+      if (sessionTimeoutId) {
+        clearTimeout(sessionTimeoutId);
+      }
+      activityEvents.forEach(event => {
+        window.removeEventListener(event, resetTimeout);
+      });
+    };
+  }, [user, lastActivity]);
 
   // Fetch user profile from users table
   async function fetchUserProfile(userId: string) {
@@ -92,6 +152,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Sign in function
   async function signIn(email: string, password: string) {
     try {
+      // First, check if the user exists and get their login attempts
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('id, status, failed_login_attempts, account_locked_until')
+        .eq('email', email)
+        .single();
+
+      // Check if account is locked
+      if (userData?.account_locked_until) {
+        const lockUntil = new Date(userData.account_locked_until);
+        const now = new Date();
+        
+        if (now < lockUntil) {
+          const minutesLeft = Math.ceil((lockUntil.getTime() - now.getTime()) / 60000);
+          return { 
+            success: false, 
+            error: `Account is locked due to too many failed login attempts. Please try again in ${minutesLeft} minute(s).` 
+          };
+        } else {
+          // Lock period expired, reset the lock
+          await supabase
+            .from('users')
+            .update({ 
+              account_locked_until: null, 
+              failed_login_attempts: 0 
+            })
+            .eq('id', userData.id);
+        }
+      }
+
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password,
@@ -99,6 +189,59 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (error) {
         console.error('Sign in error:', error);
+        
+        // If authentication failed and user exists, increment failed attempts
+        if (userData && error.message.includes('Invalid login credentials')) {
+          // Get max login attempts setting
+          const { data: settingData } = await supabase
+            .from('system_settings')
+            .select('value')
+            .eq('key', 'max_login_attempts')
+            .single();
+
+          const maxAttempts = settingData?.value ? parseInt(settingData.value) : 5;
+          const newFailedAttempts = (userData.failed_login_attempts || 0) + 1;
+
+          if (newFailedAttempts >= maxAttempts) {
+            // Lock account for 30 minutes
+            const lockUntil = new Date();
+            lockUntil.setMinutes(lockUntil.getMinutes() + 30);
+
+            await supabase
+              .from('users')
+              .update({ 
+                failed_login_attempts: newFailedAttempts,
+                account_locked_until: lockUntil.toISOString()
+              })
+              .eq('id', userData.id);
+
+            // Log the lockout
+            await supabase.from('activity_logs').insert({
+              user_id: userData.id,
+              action: 'Account locked due to failed login attempts',
+              device: navigator.userAgent,
+              ip_address: null,
+            });
+
+            return { 
+              success: false, 
+              error: `Too many failed login attempts. Your account has been locked for 30 minutes.` 
+            };
+          } else {
+            // Just increment the counter
+            await supabase
+              .from('users')
+              .update({ failed_login_attempts: newFailedAttempts })
+              .eq('id', userData.id);
+
+            const attemptsLeft = maxAttempts - newFailedAttempts;
+            return { 
+              success: false, 
+              error: `Invalid login credentials. ${attemptsLeft} attempt(s) remaining before account lock.` 
+            };
+          }
+        }
+        
         return { success: false, error: error.message };
       }
 
@@ -115,6 +258,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           await supabase.auth.signOut();
           return { success: false, error: 'Your account has been deactivated. Please contact the administrator.' };
         }
+
+        // Reset failed login attempts on successful login
+        await supabase
+          .from('users')
+          .update({ 
+            failed_login_attempts: 0,
+            account_locked_until: null
+          })
+          .eq('id', data.user.id);
 
         setUser(profile);
         setSupabaseUser(data.user);

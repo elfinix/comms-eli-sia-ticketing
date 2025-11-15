@@ -2,10 +2,12 @@ import { useState, useEffect } from 'react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
-import { Calendar, User, Paperclip, Clock, Tag } from 'lucide-react';
+import { Calendar, User, Paperclip, Clock, Tag, CheckCircle, FileText } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { toast } from 'sonner@2.0.3';
 import { supabase } from '../lib/supabaseClient';
+import ResolutionDialog from './ResolutionDialog';
+import AcknowledgmentDialog from './AcknowledgmentDialog';
 
 interface Ticket {
   id: string;
@@ -18,8 +20,12 @@ interface Ticket {
   location?: string;
   assignedTo?: string;
   submittedBy: string;
+  submittedById?: string; // Add the actual UUID
   submittedByRole: 'student' | 'faculty';
   attachment_url?: string;
+  resolution_notes?: string;
+  resolution_attachment?: string;
+  resolved_at?: string;
 }
 
 interface ViewTicketModalProps {
@@ -27,21 +33,30 @@ interface ViewTicketModalProps {
   onOpenChange: (open: boolean) => void;
   ticket: Ticket | null;
   userRole: 'student' | 'faculty' | 'ict';
-  onNavigateToChat?: () => void;
+  onNavigateToChat?: (userId?: string) => void;
   onStatusUpdate?: (newStatus: string) => void;
+  onAcknowledged?: () => void;
 }
 
-export default function ViewTicketModal({ open, onOpenChange, ticket, userRole, onNavigateToChat, onStatusUpdate }: ViewTicketModalProps) {
+export default function ViewTicketModal({ open, onOpenChange, ticket, userRole, onNavigateToChat, onStatusUpdate, onAcknowledged }: ViewTicketModalProps) {
   const [status, setStatus] = useState(ticket?.status || 'Open');
   const [assignedStaffNames, setAssignedStaffNames] = useState<string[]>([]);
   const [hasChatMessages, setHasChatMessages] = useState(false);
+  const [showResolutionDialog, setShowResolutionDialog] = useState(false);
+  const [showAcknowledgmentDialog, setShowAcknowledgmentDialog] = useState(false);
 
   // Sync status when ticket prop changes
   useEffect(() => {
     if (ticket) {
       setStatus(ticket.status);
+      console.log('🎫 Ticket Details:', {
+        id: ticket.id,
+        status: ticket.status,
+        resolution_notes: ticket.resolution_notes,
+        userRole: userRole
+      });
     }
-  }, [ticket]);
+  }, [ticket, userRole]);
 
   useEffect(() => {
     const fetchAssignedStaff = async () => {
@@ -153,11 +168,37 @@ export default function ViewTicketModal({ open, onOpenChange, ticket, userRole, 
     }
   };
 
-  const handleUpdateStatus = () => {
-    toast.success('Ticket status updated successfully!');
-    onOpenChange(false);
-    if (onStatusUpdate) {
-      onStatusUpdate(status);
+  const handleUpdateStatus = async () => {
+    // Prevent marking as Resolved without resolution notes
+    if (status === 'Resolved' && !ticket.resolution_notes) {
+      toast.error('Please use "Mark as Resolved" button to provide resolution notes');
+      return;
+    }
+
+    try {
+      // Update status in database
+      const { error } = await supabase
+        .from('tickets')
+        .update({ 
+          status,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', ticket.id);
+
+      if (error) {
+        console.error('Error updating status:', error);
+        toast.error('Failed to update status');
+        return;
+      }
+
+      toast.success('Ticket status updated successfully!');
+      onOpenChange(false);
+      if (onStatusUpdate) {
+        onStatusUpdate(status);
+      }
+    } catch (error) {
+      console.error('Error updating status:', error);
+      toast.error('Failed to update status');
     }
   };
 
@@ -249,58 +290,130 @@ export default function ViewTicketModal({ open, onOpenChange, ticket, userRole, 
             </div>
           )}
 
+          {/* Resolution Information - Show to all users if ticket is resolved */}
+          {ticket.resolution_notes && (ticket.status === 'Resolved' || ticket.status === 'Closed') && (
+            <div className="p-5 bg-green-50 rounded-lg border border-green-200">
+              <div className="flex items-center gap-2 mb-3">
+                <CheckCircle className="text-green-600" size={24} />
+                <h4 className="font-['Josefin_Sans',sans-serif] text-lg text-gray-900">
+                  Resolution Details
+                </h4>
+              </div>
+              
+              {ticket.resolved_at && (
+                <p className="text-sm text-gray-600 font-['Abel',sans-serif] mb-3">
+                  Resolved on {formatDate(ticket.resolved_at)}
+                </p>
+              )}
+
+              <div className="bg-white border border-green-200 rounded-lg p-4 mb-3">
+                <p className="font-['Abel',sans-serif] text-gray-700 whitespace-pre-wrap">
+                  {ticket.resolution_notes}
+                </p>
+              </div>
+
+              {ticket.resolution_attachment && (
+                <a
+                  href={ticket.resolution_attachment}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 text-green-700 hover:text-green-800 font-['Abel',sans-serif]"
+                >
+                  <Paperclip size={16} />
+                  View Resolution Attachment
+                </a>
+              )}
+            </div>
+          )}
+
           {/* ICT Staff Actions */}
           {userRole === 'ict' && (
             <div className="space-y-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
-              <h4 className="font-['Abel',sans-serif] text-gray-900">Update Ticket</h4>
+              <h4 className="font-['Abel',sans-serif] text-gray-900">Manage Ticket</h4>
               
-              <div className="space-y-2">
-                <label className="text-sm font-['Abel',sans-serif] text-gray-600">Status</label>
-                <Select value={status} onValueChange={setStatus}>
-                  <SelectTrigger className="font-['Abel',sans-serif]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="Open" className="font-['Abel',sans-serif]">Open</SelectItem>
-                    <SelectItem value="In Progress" className="font-['Abel',sans-serif]">In Progress</SelectItem>
-                    <SelectItem value="Resolved" className="font-['Abel',sans-serif]">Resolved</SelectItem>
-                    <SelectItem value="Closed" className="font-['Abel',sans-serif]">Closed</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="flex gap-2">
+              {/* Quick Status Buttons for ICT Staff */}
+              <div className="grid grid-cols-2 gap-2">
                 <Button
-                  onClick={handleUpdateStatus}
-                  className="bg-[#8B0000] hover:bg-[#6B0000] text-white flex-1"
+                  onClick={() => setShowResolutionDialog(true)}
+                  className="bg-green-600 hover:bg-green-700 text-white gap-2"
+                  disabled={status === 'Resolved' || status === 'Closed'}
                 >
-                  Update Status
+                  <CheckCircle size={18} />
+                  Mark as Resolved
                 </Button>
                 <Button
-                  onClick={onNavigateToChat}
+                  onClick={() => {
+                    if (ticket.submittedById && onNavigateToChat) {
+                      onNavigateToChat(ticket.submittedById);
+                    }
+                  }}
                   variant="outline"
-                  className="flex-1"
+                  className="gap-2"
                 >
+                  <FileText size={18} />
                   Chat with {ticket.submittedByRole === 'student' ? 'Student' : 'Faculty'}
                 </Button>
+              </div>
+
+              {/* Status Dropdown */}
+              <div className="space-y-2">
+                <label className="text-sm font-['Abel',sans-serif] text-gray-600">Or update status manually:</label>
+                <div className="flex gap-2">
+                  <Select value={status} onValueChange={setStatus}>
+                    <SelectTrigger className="font-['Abel',sans-serif] flex-1">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Open" className="font-['Abel',sans-serif]">Open</SelectItem>
+                      <SelectItem value="In Progress" className="font-['Abel',sans-serif]">In Progress</SelectItem>
+                      <SelectItem value="Resolved" className="font-['Abel',sans-serif]">Resolved</SelectItem>
+                      <SelectItem value="Closed" className="font-['Abel',sans-serif]">Closed</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    onClick={handleUpdateStatus}
+                    variant="outline"
+                    className="px-6"
+                  >
+                    Update
+                  </Button>
+                </div>
               </div>
             </div>
           )}
 
           {/* Student/Faculty Actions */}
-          {(userRole === 'student' || userRole === 'faculty') && hasChatMessages && (
-            <div className="flex justify-end">
-              <Button
-                onClick={onNavigateToChat}
-                className="bg-[#8B0000] hover:bg-[#6B0000] text-white"
-              >
-                Chat with ICT Staff
-              </Button>
+          {(userRole === 'student' || userRole === 'faculty') && (
+            <div className="space-y-3">
+              {/* Show Acknowledge button if ticket is Resolved (not yet Closed) */}
+              {status === 'Resolved' && ticket.resolution_notes && (
+                <div className="flex justify-end">
+                  <Button
+                    onClick={() => setShowAcknowledgmentDialog(true)}
+                    className="bg-green-600 hover:bg-green-700 text-white gap-2"
+                  >
+                    <CheckCircle size={18} />
+                    Acknowledge Resolution
+                  </Button>
+                </div>
+              )}
+
+              {/* Show Chat button if chat is available */}
+              {hasChatMessages && (
+                <div className="flex justify-end">
+                  <Button
+                    onClick={onNavigateToChat}
+                    className="bg-[#8B0000] hover:bg-[#6B0000] text-white"
+                  >
+                    Chat with ICT Staff
+                  </Button>
+                </div>
+              )}
             </div>
           )}
 
           {/* Show message if chat hasn't been initiated yet */}
-          {(userRole === 'student' || userRole === 'faculty') && !hasChatMessages && (
+          {(userRole === 'student' || userRole === 'faculty') && !hasChatMessages && status !== 'Resolved' && (
             <div className="text-center py-4 px-6 bg-gray-50 rounded-lg border border-gray-200">
               <p className="text-sm text-gray-600 font-['Abel',sans-serif]">
                 Chat will be available once an ICT staff member initiates the conversation.
@@ -309,6 +422,44 @@ export default function ViewTicketModal({ open, onOpenChange, ticket, userRole, 
           )}
         </div>
       </DialogContent>
+
+      {/* Resolution Dialog */}
+      {userRole === 'ict' && ticket && (
+        <ResolutionDialog
+          open={showResolutionDialog}
+          onOpenChange={setShowResolutionDialog}
+          ticketId={ticket.id}
+          ticketTitle={ticket.title}
+          onResolutionSubmitted={() => {
+            setShowResolutionDialog(false);
+            onOpenChange(false);
+            if (onStatusUpdate) {
+              onStatusUpdate('Resolved');
+            }
+          }}
+        />
+      )}
+
+      {/* Acknowledgment Dialog for Student/Faculty */}
+      {(userRole === 'student' || userRole === 'faculty') && ticket && ticket.resolution_notes && (
+        <AcknowledgmentDialog
+          open={showAcknowledgmentDialog}
+          onOpenChange={setShowAcknowledgmentDialog}
+          ticketId={ticket.id}
+          ticketTitle={ticket.title}
+          resolutionNotes={ticket.resolution_notes}
+          resolutionAttachment={ticket.resolution_attachment || null}
+          resolvedAt={ticket.resolved_at || ''}
+          assignedToName={assignedStaffNames.join(', ') || 'ICT Staff'}
+          onAcknowledged={() => {
+            setShowAcknowledgmentDialog(false);
+            onOpenChange(false);
+            if (onAcknowledged) {
+              onAcknowledged();
+            }
+          }}
+        />
+      )}
     </Dialog>
   );
 }

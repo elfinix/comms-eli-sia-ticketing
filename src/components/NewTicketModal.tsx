@@ -9,6 +9,7 @@ import { Upload, X } from 'lucide-react';
 import { toast } from 'sonner@2.0.3';
 import { supabase } from '../lib/supabaseClient';
 import { useAuth } from '../contexts/AuthContext';
+import { projectId, publicAnonKey } from '../utils/supabase/info';
 
 interface NewTicketModalProps {
   open: boolean;
@@ -29,12 +30,21 @@ export default function NewTicketModal({ open, onOpenChange, userRole, onTicketC
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Map display names to database values
-  const categories = [
+  const allCategories = [
     { label: 'Hardware Issue', value: 'Hardware' },
     { label: 'Software Issue', value: 'Software' },
     { label: 'Network/Internet', value: 'Network' },
     { label: 'Account Access', value: 'Account' },
   ];
+
+  // Students can only select Network/Internet and Account Access
+  const studentCategories = [
+    { label: 'Network/Internet', value: 'Network' },
+    { label: 'Account Access', value: 'Account' },
+  ];
+
+  // Use student-specific categories for students, all categories for faculty
+  const categories = userRole === 'student' ? studentCategories : allCategories;
 
   const urgencies = ['Low', 'Medium', 'High'];
 
@@ -57,45 +67,70 @@ export default function NewTicketModal({ open, onOpenChange, userRole, onTicketC
     setIsSubmitting(true);
 
     try {
-      // Generate ticket ID in format TKT-YYMM-NNN
+      // Generate ticket ID in format TKT-YYMM-NNN with robust sequence handling
       const now = new Date();
       const yearMonth = `${String(now.getFullYear()).slice(-2)}${String(now.getMonth() + 1).padStart(2, '0')}`;
       
-      // Get the count of tickets this month to generate the sequence number
-      const { count } = await supabase
+      // Get the highest ticket number for this month to avoid duplicates
+      const { data: existingTickets, error: fetchError } = await supabase
         .from('tickets')
-        .select('*', { count: 'exact', head: true })
-        .gte('created_at', `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`);
+        .select('id')
+        .like('id', `TKT-${yearMonth}-%`)
+        .order('id', { ascending: false })
+        .limit(1);
 
-      const sequenceNumber = String((count || 0) + 1).padStart(3, '0');
-      const ticketId = `TKT-${yearMonth}-${sequenceNumber}`;
+      let sequenceNumber = 1;
+      if (existingTickets && existingTickets.length > 0) {
+        // Extract the sequence number from the last ticket ID
+        const lastId = existingTickets[0].id;
+        const lastSequence = parseInt(lastId.split('-')[2]);
+        sequenceNumber = lastSequence + 1;
+      }
+
+      const ticketId = `TKT-${yearMonth}-${String(sequenceNumber).padStart(3, '0')}`;
 
       // Upload attachment if exists
       let attachmentUrl: string | null = null;
       if (attachment) {
-        const fileExt = attachment.name.split('.').pop();
-        const fileName = `${user.id}/${ticketId}-${Date.now()}.${fileExt}`;
+        console.log('📤 Uploading file via backend...');
         
-        const { data: uploadData, error: uploadError } = await supabase.storage
-          .from('ticket-attachments')
-          .upload(fileName, attachment, {
-            cacheControl: '3600',
-            upsert: false
-          });
-
-        if (uploadError) {
-          console.error('Error uploading file:', uploadError);
-          toast.error('Failed to upload attachment. Please try again.');
+        // Get current user session for auth token
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) {
+          toast.error('Session expired. Please login again.');
           setIsSubmitting(false);
           return;
         }
 
-        // Get the public URL for the uploaded file
-        const { data: { publicUrl } } = supabase.storage
-          .from('ticket-attachments')
-          .getPublicUrl(fileName);
-        
-        attachmentUrl = publicUrl;
+        // Create FormData for file upload
+        const formData = new FormData();
+        formData.append('file', attachment);
+        formData.append('folder', `${user.id}`);
+        formData.append('ticketId', ticketId);
+
+        // Upload via backend (bypasses RLS using service role)
+        const uploadResponse = await fetch(
+          `https://${projectId}.supabase.co/functions/v1/make-server-0488e420/upload`,
+          {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${session.access_token}`,
+            },
+            body: formData,
+          }
+        );
+
+        if (!uploadResponse.ok) {
+          const errorData = await uploadResponse.json();
+          console.error('❌ Upload failed:', errorData);
+          toast.error(`Failed to upload attachment: ${errorData.error || 'Unknown error'}`);
+          setIsSubmitting(false);
+          return;
+        }
+
+        const uploadResult = await uploadResponse.json();
+        console.log('✅ File uploaded successfully:', uploadResult);
+        attachmentUrl = uploadResult.url;
       }
 
       // Create the ticket WITHOUT assignment (Admin will assign later)

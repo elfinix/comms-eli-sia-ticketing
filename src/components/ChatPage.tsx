@@ -88,11 +88,12 @@ export default function ChatPage({ currentUserId, currentUserRole, ticketId }: C
       // For students and faculty, only show conversations that have messages
       // (meaning ICT staff initiated the conversation)
       if (currentUserRole === 'student' || currentUserRole === 'faculty') {
-        // Get unique sender IDs from messages where current user is the receiver
+        // Get unique sender IDs from NON-ARCHIVED messages where current user is the receiver
         const { data: messagesData, error: messagesError } = await supabase
           .from('chat_messages')
           .select('sender_id')
-          .eq('receiver_id', currentUserId);
+          .eq('receiver_id', currentUserId)
+          .is('archived_at', null); // Only show non-archived conversations
 
         if (messagesError) {
           console.error('Error fetching messages:', messagesError);
@@ -138,6 +139,67 @@ export default function ChatPage({ currentUserId, currentUserRole, ticketId }: C
 
     fetchContacts();
   }, [currentUserId, currentUserRole]);
+
+  // Real-time subscription to update contacts when new messages arrive (for students/faculty)
+  useEffect(() => {
+    if (currentUserRole !== 'student' && currentUserRole !== 'faculty') return;
+
+    console.log('Setting up global real-time subscription for new contacts...');
+
+    const channel = supabase
+      .channel(`new-contacts-${currentUserId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'chat_messages',
+          filter: `receiver_id=eq.${currentUserId}`,
+        },
+        async (payload) => {
+          const newMsg = payload.new as any;
+          
+          // Skip archived messages
+          if (newMsg.archived_at) {
+            console.log('Skipping archived message in contact update');
+            return;
+          }
+
+          const senderId = newMsg.sender_id;
+          
+          // Check if this sender is already in contacts
+          const exists = contacts.some(c => c.id === senderId);
+          if (exists) {
+            console.log('Contact already exists:', senderId);
+            return;
+          }
+
+          // Fetch the new contact details
+          console.log('New message from unknown contact, fetching details:', senderId);
+          const { data, error } = await supabase
+            .from('users')
+            .select('id, name, email, department, role')
+            .eq('id', senderId)
+            .eq('role', 'ict')
+            .eq('status', 'active')
+            .single();
+
+          if (!error && data) {
+            console.log('Adding new contact to list:', data);
+            setContacts(prev => [...prev, data as Contact]);
+            
+            // Auto-select this new contact
+            setSelectedContact(data as Contact);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      console.log('Cleaning up global real-time subscription');
+      supabase.removeChannel(channel);
+    };
+  }, [currentUserId, currentUserRole, contacts]);
   
   // Auto-select first contact if nothing is selected (after session storage check)
   useEffect(() => {
@@ -157,7 +219,8 @@ export default function ChatPage({ currentUserId, currentUserRole, ticketId }: C
     if (!selectedContact) return;
 
     const fetchMessages = async () => {
-      const { data, error } = await supabase
+      // For students/faculty, exclude archived messages
+      let query = supabase
         .from('chat_messages')
         .select(`
           id,
@@ -166,8 +229,14 @@ export default function ChatPage({ currentUserId, currentUserRole, ticketId }: C
           message,
           created_at
         `)
-        .or(`and(sender_id.eq.${currentUserId},receiver_id.eq.${selectedContact.id}),and(sender_id.eq.${selectedContact.id},receiver_id.eq.${currentUserId})`)
-        .order('created_at', { ascending: true });
+        .or(`and(sender_id.eq.${currentUserId},receiver_id.eq.${selectedContact.id}),and(sender_id.eq.${selectedContact.id},receiver_id.eq.${currentUserId})`);
+      
+      // Filter out archived messages for students/faculty
+      if (currentUserRole === 'student' || currentUserRole === 'faculty') {
+        query = query.is('archived_at', null);
+      }
+      
+      const { data, error } = await query.order('created_at', { ascending: true });
 
       if (error) {
         console.error('Error fetching messages:', error);
@@ -195,6 +264,12 @@ export default function ChatPage({ currentUserId, currentUserRole, ticketId }: C
             (newMsg.sender_id === currentUserId && newMsg.receiver_id === selectedContact.id) ||
             (newMsg.sender_id === selectedContact.id && newMsg.receiver_id === currentUserId)
           ) {
+            // For students/faculty, skip archived messages
+            if ((currentUserRole === 'student' || currentUserRole === 'faculty') && (newMsg as any).archived_at) {
+              console.log('Skipping archived message in real-time update');
+              return;
+            }
+            
             setMessages(prev => {
               // Avoid duplicates
               const exists = prev.some(m => m.id === newMsg.id);

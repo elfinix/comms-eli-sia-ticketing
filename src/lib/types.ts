@@ -42,6 +42,10 @@ export interface Ticket {
   updated_at: string;
   resolved_at: string | null;
   closed_at: string | null;
+  resolution_notes: string | null;
+  resolution_attachment: string | null;
+  acknowledged_at: string | null;
+  acknowledged_by: string | null;
 }
 
 export interface TicketNote {

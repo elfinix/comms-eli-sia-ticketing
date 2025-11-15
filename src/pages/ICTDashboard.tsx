@@ -199,6 +199,7 @@ export default function ICTDashboard({ onLogout, currentUserId }: ICTDashboardPr
       .from('chat_messages')
       .select('id')
       .or(`and(sender_id.eq.${currentUserId},receiver_id.eq.${submitterData.id}),and(sender_id.eq.${submitterData.id},receiver_id.eq.${currentUserId})`)
+      .is('archived_at', null) // Only check for non-archived messages
       .limit(1);
     
     console.log('Existing messages:', existingMessages);
@@ -229,9 +230,27 @@ export default function ICTDashboard({ onLogout, currentUserId }: ICTDashboardPr
       
       console.log('✅ Message created successfully:', insertedMessage);
       
+      // Create notification for the student/faculty
+      const { error: notifError } = await supabase
+        .from('notifications')
+        .insert({
+          user_id: submitterData.id,
+          title: 'New Message from ICT Staff',
+          message: `${currentUser?.name || 'ICT Staff'} has started a conversation about your ticket "${ticket.title}".`,
+          type: 'chat',
+          is_read: false,
+          chat_sender_id: currentUserId,
+        });
+      
+      if (notifError) {
+        console.error('❌ Error creating notification:', notifError);
+      } else {
+        console.log('✅ Notification created successfully');
+      }
+      
       toast.success('Conversation started!');
     } else {
-      console.log('✅ Existing conversation found');
+      console.log('✅ Existing conversation found, continuing...');
     }
     
     // Store the contact ID for ChatPageICT to select
@@ -243,7 +262,9 @@ export default function ICTDashboard({ onLogout, currentUserId }: ICTDashboardPr
   };
 
   const handleNavigateToChat = (contactId: string) => {
-    // Store the contact ID in sessionStorage so ChatPageICT can auto-select it
+    // This is a simplified version - just store contactId and navigate
+    // The actual check for archived messages and sending initial greeting
+    // should happen on the chat page or be handled separately
     sessionStorage.setItem('chatContactId', contactId);
     setCurrentPage('chat');
   };
@@ -323,8 +344,12 @@ export default function ICTDashboard({ onLogout, currentUserId }: ICTDashboardPr
     }),
     assignedTo: selectedTicket.assigned_to, // Pass the actual UUID array
     submittedBy: selectedTicket.submitted_by_name || 'Unknown',
+    submittedById: selectedTicket.submitted_by, // Add the actual UUID
     submittedByRole: (selectedTicket.submitted_by_role || 'student') as 'student' | 'faculty',
     attachment_url: selectedTicket.attachment_url, // Include attachment URL
+    resolution_notes: selectedTicket.resolution_notes, // Include resolution notes
+    resolution_attachment: selectedTicket.resolution_attachment, // Include resolution attachment
+    resolved_at: selectedTicket.resolved_at, // Include resolution timestamp
   } : null;
 
   // Convert Ticket to display format for TicketCard

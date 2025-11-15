@@ -267,4 +267,112 @@ app.delete("/make-server-0488e420/users/:id", async (c) => {
   }
 });
 
+// Upload file to storage (bypasses RLS by using service role)
+app.post("/make-server-0488e420/upload", async (c) => {
+  try {
+    console.log('📤 Upload request received');
+
+    // Verify user is authenticated (not necessarily admin)
+    const authHeader = c.req.header('Authorization');
+    if (!authHeader) {
+      console.log('❌ No authorization header');
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+
+    const token = authHeader.split(' ')[1];
+    const userSupabase = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
+      {
+        global: {
+          headers: {
+            Authorization: authHeader,
+          },
+        },
+      }
+    );
+
+    const { data: { user }, error: authError } = await userSupabase.auth.getUser();
+    if (authError || !user) {
+      console.log('❌ Auth error:', authError?.message);
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+
+    console.log('✅ User authenticated:', user.id);
+
+    // Parse multipart form data
+    const formData = await c.req.formData();
+    const file = formData.get('file') as File;
+    const folder = formData.get('folder') as string || 'uploads';
+    const ticketId = formData.get('ticketId') as string || 'unknown';
+
+    if (!file) {
+      console.log('❌ No file provided');
+      return c.json({ error: 'No file provided' }, 400);
+    }
+
+    console.log('📁 File details:', {
+      name: file.name,
+      size: file.size,
+      type: file.type,
+      folder,
+      ticketId
+    });
+
+    // Check file size (10MB limit)
+    if (file.size > 10 * 1024 * 1024) {
+      return c.json({ error: 'File size exceeds 10MB limit' }, 400);
+    }
+
+    // Generate unique filename
+    const fileExt = file.name.split('.').pop();
+    const fileName = `${ticketId}_${Date.now()}.${fileExt}`;
+    const filePath = `${folder}/${fileName}`;
+
+    console.log('📤 Uploading to:', filePath);
+
+    // Convert File to ArrayBuffer then to Uint8Array
+    const arrayBuffer = await file.arrayBuffer();
+    const uint8Array = new Uint8Array(arrayBuffer);
+
+    // Upload using service role (bypasses RLS!)
+    const { data: uploadData, error: uploadError } = await supabase.storage
+      .from('ticket-attachments')
+      .upload(filePath, uint8Array, {
+        contentType: file.type,
+        upsert: false
+      });
+
+    if (uploadError) {
+      console.error('❌ Upload error:', uploadError);
+      return c.json({ 
+        error: `Upload failed: ${uploadError.message}`,
+        details: uploadError 
+      }, 500);
+    }
+
+    console.log('✅ File uploaded:', uploadData.path);
+
+    // Get public URL
+    const { data: urlData } = supabase.storage
+      .from('ticket-attachments')
+      .getPublicUrl(filePath);
+
+    console.log('🔗 Public URL:', urlData.publicUrl);
+
+    return c.json({
+      success: true,
+      path: uploadData.path,
+      url: urlData.publicUrl
+    });
+
+  } catch (err: any) {
+    console.error('❌ Server error during upload:', err);
+    return c.json({ 
+      error: `Server error: ${err.message}`,
+      stack: err.stack 
+    }, 500);
+  }
+});
+
 Deno.serve(app.fetch);

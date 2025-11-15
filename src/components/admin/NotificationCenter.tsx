@@ -158,7 +158,7 @@ export default function NotificationCenter() {
     
     const { data: users, error: usersError } = await supabase
       .from('users')
-      .select('id')
+      .select('id, email')
       .in('role', roleFilter)
       .neq('id', currentUser?.id); // Exclude the current admin
     
@@ -175,8 +175,26 @@ export default function NotificationCenter() {
       return;
     }
     
-    // Create notification for each user
-    const notificationsToInsert = users.map(user => ({
+    // Get user preferences for push notifications
+    const { data: preferences } = await supabase
+      .from('user_preferences')
+      .select('user_id, push_notifications')
+      .in('user_id', users.map(u => u.id));
+
+    // Filter users based on their push notification preferences
+    const usersWithNotifEnabled = users.filter(user => {
+      const userPref = preferences?.find(p => p.user_id === user.id);
+      // Default to true if preference not found
+      return userPref?.push_notifications !== false;
+    });
+
+    if (usersWithNotifEnabled.length === 0) {
+      toast.warning('No users have push notifications enabled');
+      return;
+    }
+
+    // Create notification for users with push notifications enabled
+    const notificationsToInsert = usersWithNotifEnabled.map(user => ({
       user_id: user.id,
       title: formData.title,
       message: formData.message,

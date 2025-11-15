@@ -174,6 +174,10 @@ export default function StudentDashboard({ onLogout, currentUserId }: StudentDas
         assignedTo: ticket.assigned_to || undefined,
         submittedBy: user?.name || 'Unknown User',
         submittedByRole: 'student',
+        // Explicitly pass resolution fields
+        resolution_notes: ticket.resolution_notes,
+        resolution_attachment: ticket.resolution_attachment,
+        resolved_at: ticket.resolved_at,
       } as any);
       setShowViewTicketModal(true);
     }
@@ -476,14 +480,7 @@ export default function StudentDashboard({ onLogout, currentUserId }: StudentDas
         ticket={selectedTicket}
         userRole="student"
         onNavigateToChat={handleOpenChat}
-      />
-
-      <ChatModal
-        open={showChatModal}
-        onOpenChange={setShowChatModal}
-        ticketId={selectedTicket?.id || ''}
-        currentUserRole="student"
-        recipientName="ICT Staff"
+        onAcknowledged={fetchTickets}
       />
     </>
   );
